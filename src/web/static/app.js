@@ -146,10 +146,12 @@ function renderClassifyCard(result, imageUrl) {
 // "车型资料"卡片 —— 从 query_car_info 渲染
 function renderInfoCard(result) {
   if (!result || !result.ok) return '';
+  const typeParts = [result.body_type, result.body_type_detail].filter(Boolean).join(' · ');
   const items = [
-    ['中文名', result.name_from_new],
-    ['英文名', result.name_from_old],
-    ['类型', (result.type_info || '').split('####')[0]],
+    ['中文名', result.name_zh],
+    ['英文名', result.name_en],
+    ['品牌', [result.brand_zh, result.brand_en].filter(Boolean).join(' / ')],
+    ['类型', typeParts],
   ].filter(([, v]) => v);
   return `
     <div class="tool-card-embed">
