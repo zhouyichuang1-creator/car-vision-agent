@@ -289,27 +289,39 @@ git remote add origin https://github.com/<用户名>/<仓库名>.git
 
 Git **不读** Windows 系统代理，必须单独告诉它。Clash Verge 的混合端口默认 `127.0.0.1:7897`。
 
-**推荐做法 —— 只在 push 那一行临时挂代理，不写任何持久配置：**
+**唯一推荐写法 —— 只在 push 那一行临时挂代理，不写任何持久配置：**
 
 ```bash
-git -c http.proxy=socks5://127.0.0.1:7897 push -u origin main
+git -c http.proxy=http://127.0.0.1:7897 push -u origin main
 ```
 
 这样**不需要**执行 `git config`，也就不存在"以后不用节点了要改回来"的问题。
 
+**⚠️ 必须用 `http://`，绝对不能用 `socks5://`** —— 这是实测踩出来的坑：
+
+- Git Credential Manager（.NET 写的）会读取 git 的 `http.proxy` 配置，而 .NET 的 `ServicePointManager` **不支持 socks5 方案**，会直接报
+  `fatal: ServicePointManager 不支持具有 socks5 方案的代理。`
+  然后认证失败、push 中断（若终端不可交互，还会叠加 `could not read Username ... terminal prompts disabled`）。
+- 而 `http://127.0.0.1:7897` 对**两边都有效**：git 传输实测通过（`git -c http.proxy=http://127.0.0.1:7897 ls-remote` 成功返回 HEAD），GCM 也能正常走代理弹出浏览器授权窗口。
+
 若嫌每次要敲太长，可临时写进本仓库配置（只影响本项目，不影响其他仓库）：
 
 ```bash
-git config --local http.proxy  socks5://127.0.0.1:7897
-git config --local https.proxy socks5://127.0.0.1:7897
+git config --local http.proxy  http://127.0.0.1:7897
+git config --local https.proxy http://127.0.0.1:7897
 # 不用时一键清除：
 git config --local --unset http.proxy; git config --local --unset https.proxy
 ```
 
-**三个必须知道的点：**
-1. 只用 `socks5://`，**不要用 `http://`**——Git Bash 的 curl 走 HTTP 代理连 HTTPS 目标会触发 Windows schannel 的 TLS 重协商死循环，表现为卡住后失败。
-2. Clash 必须**保持运行**；退出代理软件后 git 立即断网。
-3. Clash 里那个「系统代理」开关是给**浏览器**用的（注册 GitHub、建仓库、生成 Token 都在网页做），git 用不到它。
+**另外两点：**
+1. Clash 必须**保持运行**；退出代理软件后 git 立即断网。
+2. Clash 里那个「系统代理」开关是给**浏览器和 GCM**用的（注册 GitHub、建仓库、生成 Token 都在网页做）；git 自身的传输用不到它。
+
+#### 9.4.1 旧结论「必须用 socks5」已推翻
+
+早期是用 **curl** 测试 HTTP 代理时遇到了 schannel 的 TLS 重协商死循环，据此写下了"必须用 `socks5://`"。后来用 **git 本体**复测，`http://127.0.0.1:7897` 完全正常——那个毛病只存在于 Git Bash 自带的 curl，不影响 git。而且 `socks5://` 会让 GCM 的认证环节直接失败。
+
+**最终结论：统一用 `http://`。** 不要再用 socks5 跑 git 的推送。
 
 ### 9.5 关于中文项目路径
 
@@ -406,22 +418,20 @@ push 时会弹出一个 GitHub 登录窗口 → 点 **Sign in with your browser*
 #### 第 5 步 · 最后执行推送
 
 ```bash
-# 让 Git Credential Manager 能连上 GitHub（.NET 用它自己的 HTTP 栈，
-# 走 http:// 形式的代理没有 schannel 那个 bug，可以放心用）
-export HTTPS_PROXY=http://127.0.0.1:7897
-
-# git 自身的传输用 socks5（原因见 9.4），-c 的优先级高于环境变量
-git -c http.proxy=socks5://127.0.0.1:7897 push -u origin main
+git -c http.proxy=http://127.0.0.1:7897 push -u origin main
 ```
 
-看到 `branch 'main' set up to track 'origin/main'` 即成功。刷新浏览器里的仓库页面，应能看到 31 个文件与 7 条提交记录。
+看到 `branch 'main' set up to track 'origin/main'` 即成功。刷新浏览器里的仓库页面，应能看到 31 个文件与 6 条提交记录。
+
+> 不需要设置 `HTTPS_PROXY` 之类的环境变量：GCM 默认就会使用 Windows 系统代理，而第 0 步已经把 Clash 的「系统代理」打开了。
 
 #### 常见报错对照
 
 | 报错关键词 | 原因 | 解决 |
 | --- | --- | --- |
-| `Could not resolve host: github.com` | Clash 没运行，或命令漏了 `-c http.proxy=…` | 打开 Clash；给命令补上 `-c http.proxy=socks5://127.0.0.1:7897` |
-| `schannel` / `SSL_ERROR_SYSCALL` / 卡住几十秒后失败 | 代理写成了 `http://` | 改成 `socks5://127.0.0.1:7897` |
+| `ServicePointManager 不支持具有 socks5 方案的代理` | 代理写成了 `socks5://`，GCM 不支持 | 改成 `http://127.0.0.1:7897`（见 9.4） |
+| `could not read Username ... terminal prompts disabled` | 认证失败后又无法交互式询问 | 修好代理；或在真实终端里手动执行一次 |
+| `Could not resolve host: github.com` | Clash 没运行，或命令漏了 `-c http.proxy=…` | 打开 Clash；给命令补上代理参数 |
 | `Authentication failed` / `403` | PAT 过期，或没勾 `repo` | 重新生成令牌并勾选 `repo` |
 | `non-fast-forward` / `Updates were rejected` | 建仓库时勾了 README/gitignore/license | 删掉该仓库重建空仓库，或用 `git push --force` 覆盖远端 |
 | `Please tell me who you are` | `user.name` / `user.email` 没设 | 执行 9.3 第 2 步 |
